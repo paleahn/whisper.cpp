@@ -8,7 +8,11 @@ using to_t_cuda_t = void (*)(const void * x, T * y, int64_t k, cudaStream_t stre
 
 typedef to_t_cuda_t<float> to_fp32_cuda_t;
 typedef to_t_cuda_t<half> to_fp16_cuda_t;
+#if GGML_CUDA_HAS_BF16
 typedef to_t_cuda_t<nv_bfloat16> to_bf16_cuda_t;
+#else
+typedef void (*to_bf16_cuda_t)(const void *, void *, int64_t, cudaStream_t);
+#endif // GGML_CUDA_HAS_BF16
 
 to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type);
 
@@ -25,7 +29,13 @@ using to_t_nc_cuda_t = void (*)(const void * x, T * y,
 
 typedef to_t_nc_cuda_t<float> to_fp32_nc_cuda_t;
 typedef to_t_nc_cuda_t<half> to_fp16_nc_cuda_t;
+#if GGML_CUDA_HAS_BF16
 typedef to_t_nc_cuda_t<nv_bfloat16> to_bf16_nc_cuda_t;
+#else
+typedef void (*to_bf16_nc_cuda_t)(const void *, void *,
+    int64_t, int64_t, int64_t, int64_t,
+    int64_t, int64_t, int64_t, cudaStream_t);
+#endif // GGML_CUDA_HAS_BF16
 
 to_fp32_nc_cuda_t ggml_get_to_fp32_nc_cuda(ggml_type type);
 to_fp16_nc_cuda_t ggml_get_to_fp16_nc_cuda(ggml_type type);
@@ -33,15 +43,16 @@ to_bf16_nc_cuda_t ggml_get_to_bf16_nc_cuda(ggml_type type);
 
 template<typename dst_t, typename src_t>
  __host__ __device__ inline dst_t ggml_cuda_cast(src_t x) {
-    if constexpr (std::is_same_v<dst_t, src_t>) {
+    if constexpr (std::is_same<dst_t, src_t>::value) {
         return x;
-    } else if constexpr(std::is_same_v<dst_t, nv_bfloat16>) {
+#if GGML_CUDA_HAS_BF16
+    } else if constexpr(std::is_same<dst_t, nv_bfloat16>::value) {
         return __float2bfloat16(float(x));
-    } else if constexpr(std::is_same_v<src_t, nv_bfloat16>) {
+    } else if constexpr(std::is_same<src_t, nv_bfloat16>::value) {
         return __bfloat162float(x);
-    } else if constexpr(std::is_same_v<src_t, float2> && std::is_same_v<dst_t, half2>) {
+    } else if constexpr(std::is_same<src_t, float2>::value && std::is_same<dst_t, half2>::value) {
         return __float22half2_rn(x);
-    } else if constexpr(std::is_same_v<src_t, nv_bfloat162> && std::is_same_v<dst_t, float2>) {
+    } else if constexpr(std::is_same<src_t, nv_bfloat162>::value && std::is_same<dst_t, float2>::value) {
 #ifdef GGML_USE_HIP
         return make_float2(__bfloat162float(__low2bfloat16(x)), __bfloat162float(__high2bfloat16(x)));
 #else
@@ -51,14 +62,15 @@ template<typename dst_t, typename src_t>
         return make_float2(__bfloat162float(x.x), __bfloat162float(x.y));
 #endif // __CUDA_ARCH__ >= 800
 #endif // GGML_USE_HIP
-    } else if constexpr(std::is_same_v<src_t, float2> && std::is_same_v<dst_t, nv_bfloat162>) {
+    } else if constexpr(std::is_same<src_t, float2>::value && std::is_same<dst_t, nv_bfloat162>::value) {
         // bypass compile error on cuda 12.0.1
 #ifdef GGML_USE_HIP
         return __float22bfloat162_rn(x);
 #else
         return {x.x, x.y};
 #endif // GGML_USE_HIP
-    } else if constexpr(std::is_same_v<dst_t, int32_t>) {
+#endif // GGML_CUDA_HAS_BF16
+    } else if constexpr(std::is_same<dst_t, int32_t>::value) {
         return int32_t(x);
     } else {
         return float(x);

@@ -47,6 +47,7 @@
 #define CUDART_HMAX   11070 // CUDA 11.7, min. ver. for which __hmax and __hmax2 are known to work (may be higher than needed)
 #define CUDART_HMASK  12000 // CUDA 12.0, min. ver. for half2 -> uint mask comparisons
 
+#define GGML_CUDA_CC_MAXWELL_TEGRA   530
 #define GGML_CUDA_CC_PASCAL          600
 #define GGML_CUDA_CC_DP4A            610 // minimum compute capability for __dp4a, an intrinsic for byte-wise dot products
 #define GGML_CUDA_CC_VOLTA           700
@@ -254,13 +255,13 @@ static const char * cu_get_error_str(CUresult err) {
 #define GGML_USE_VMM
 #endif // (!defined(GGML_USE_HIP) && !defined(GGML_CUDA_NO_VMM)) || (defined(GGML_USE_HIP) && !defined(GGML_HIP_NO_VMM))
 
-#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA) || __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL
+#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA) || __CUDA_ARCH__ == GGML_CUDA_CC_MAXWELL_TEGRA || __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL
 #define FP16_AVAILABLE
-#endif // defined(GGML_USE_HIP) || defined(GGML_USE_MUSA) || __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL
+#endif // defined(GGML_USE_HIP) || defined(GGML_USE_MUSA) || __CUDA_ARCH__ == GGML_CUDA_CC_MAXWELL_TEGRA || __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL
 
-#if defined(FP16_AVAILABLE) && __CUDA_ARCH__ != 610
+#if defined(FP16_AVAILABLE) && __CUDA_ARCH__ != GGML_CUDA_CC_MAXWELL_TEGRA && __CUDA_ARCH__ != 610
 #define FAST_FP16_AVAILABLE
-#endif // defined(FP16_AVAILABLE) && __CUDA_ARCH__ != 610
+#endif // defined(FP16_AVAILABLE) && __CUDA_ARCH__ != GGML_CUDA_CC_MAXWELL_TEGRA && __CUDA_ARCH__ != 610
 
 #if defined(GGML_USE_HIP) && defined(CDNA) && !defined(GGML_HIP_NO_MMQ_MFMA)
 #define AMD_MFMA_AVAILABLE
@@ -296,13 +297,15 @@ static const char * cu_get_error_str(CUresult err) {
 #endif // !defined(GGML_CUDA_NO_FA) && !(defined(GGML_USE_MUSA) && __MUSA_ARCH__ < 220)
 
 static bool fp16_available(const int cc) {
-    return ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_PASCAL ||
+    return ggml_cuda_highest_compiled_arch(cc) == GGML_CUDA_CC_MAXWELL_TEGRA ||
+        ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_PASCAL ||
         (GGML_CUDA_CC_IS_MTHREADS(cc) && cc >= GGML_CUDA_CC_PH1);
 }
 
 static bool fast_fp16_available(const int cc) {
     return GGML_CUDA_CC_IS_AMD(cc) ||
-        (GGML_CUDA_CC_IS_NVIDIA(cc) && fp16_available(cc) && ggml_cuda_highest_compiled_arch(cc) != 610) ||
+        (GGML_CUDA_CC_IS_NVIDIA(cc) && fp16_available(cc) &&
+         ggml_cuda_highest_compiled_arch(cc) != GGML_CUDA_CC_MAXWELL_TEGRA && ggml_cuda_highest_compiled_arch(cc) != 610) ||
         (GGML_CUDA_CC_IS_MTHREADS(cc) && fp16_available(cc));
 }
 
@@ -568,51 +571,54 @@ template<block_reduce_method method_t, typename T>
 struct block_reduce_policy;
 
 template <typename T, typename... Ts>
-inline constexpr bool is_any = (std::is_same_v<T, Ts> || ...);
+struct is_any : std::false_type {};
 
-template<typename...>
-inline constexpr bool ggml_cuda_dependent_false_v = false;
+template <typename T, typename U, typename... Ts>
+struct is_any<T, U, Ts...> : std::conditional<std::is_same<T, U>::value, std::true_type, is_any<T, Ts...>>::type {};
+
+template<typename>
+struct ggml_cuda_dependent_false : std::false_type {};
 
 template <typename T> struct block_reduce_policy<block_reduce_method::SUM, T> {
     static __device__ T reduce(T val) {
-        if constexpr(is_any<T, float, float2, half2, int>) {
+        if constexpr(is_any<T, float, float2, half2, int>::value) {
             return warp_reduce_sum(val);
         } else {
-            static_assert(ggml_cuda_dependent_false_v<T>, "Unsupported type for block reduce sum");
+            static_assert(ggml_cuda_dependent_false<T>::value, "Unsupported type for block reduce sum");
         }
     }
 
     static __device__ T sentinel() {
-        if constexpr (std::is_same_v<T, float>) {
+        if constexpr (std::is_same<T, float>::value) {
             return 0.0f;
-        } else if constexpr (std::is_same_v<T, float2>) {
+        } else if constexpr (std::is_same<T, float2>::value) {
             return make_float2(0.0f, 0.0f);
-        } else if constexpr (std::is_same_v<T, half2>) {
+        } else if constexpr (std::is_same<T, half2>::value) {
             return make_half2(0.0f, 0.0f);
-        } else if constexpr (std::is_same_v<T, int>) {
+        } else if constexpr (std::is_same<T, int>::value) {
             return 0;
         } else {
-            static_assert(ggml_cuda_dependent_false_v<T>, "Unsupported type for block reduce sum");
+            static_assert(ggml_cuda_dependent_false<T>::value, "Unsupported type for block reduce sum");
         }
     }
 };
 
 template <typename T> struct block_reduce_policy<block_reduce_method::MAX, T> {
     static __device__ T reduce(T val) {
-        if constexpr (is_any<T, float, half2>) {
+        if constexpr (is_any<T, float, half2>::value) {
             return warp_reduce_max(val);
         } else {
-            static_assert(ggml_cuda_dependent_false_v<T>, "Unsupported type for block reduce max");
+            static_assert(ggml_cuda_dependent_false<T>::value, "Unsupported type for block reduce max");
         }
     }
 
     static __device__ T sentinel() {
-        if constexpr (std::is_same_v<T, float>) {
+        if constexpr (std::is_same<T, float>::value) {
             return -INFINITY;
-        } else if constexpr (std::is_same_v<T, half2>) {
+        } else if constexpr (std::is_same<T, half2>::value) {
             return make_half2(-INFINITY, -INFINITY);
         } else {
-            static_assert(ggml_cuda_dependent_false_v<T>, "Unsupported type for block reduce max");
+            static_assert(ggml_cuda_dependent_false<T>::value, "Unsupported type for block reduce max");
         }
     }
 };
@@ -1288,7 +1294,9 @@ struct ggml_cuda_concurrent_event {
         const int64_t       join_start = (int64_t) join_t->data;
         const int64_t       join_end   = join_start + ggml_nbytes(join_t);
 
-        for (const auto & [tensor, stream] : stream_mapping) {
+        for (const auto & mapping : stream_mapping) {
+            const ggml_tensor * tensor = mapping.first;
+            const int stream = mapping.second;
             const ggml_tensor * t = tensor->view_src ? tensor->view_src : tensor;
             const int64_t       t_start = (int64_t) t->data;
             const int64_t       t_end   = t_start + ggml_nbytes(t);
@@ -1309,7 +1317,9 @@ struct ggml_cuda_concurrent_event {
 
         bool writes_overlap = false;
         bool dependent_srcs = false;
-        for (const auto & [tensor, stream] : stream_mapping) {
+        for (const auto & mapping : stream_mapping) {
+            const ggml_tensor * tensor = mapping.first;
+            const int stream = mapping.second;
             const ggml_tensor * t = tensor->view_src ? tensor->view_src : tensor;
             const int64_t       t_start = (int64_t) t->data;
             const int64_t       t_end   = t_start + ggml_nbytes(t);
@@ -1431,8 +1441,8 @@ struct ggml_backend_cuda_context {
     // Check if any CUDA graph is enabled for this context (used by kernels that need to know
     // if graphs are in use without having access to the specific graph key)
     bool any_cuda_graph_enabled() const {
-        for (const auto & [key, graph] : cuda_graphs) {
-            if (graph && graph->is_enabled()) {
+        for (const auto & it : cuda_graphs) {
+            if (it.second && it.second->is_enabled()) {
                 return true;
             }
         }
@@ -1441,8 +1451,8 @@ struct ggml_backend_cuda_context {
 
     // Check if any CUDA graph has an instance for this context
     bool any_cuda_graph_has_instance() const {
-        for (const auto & [key, graph] : cuda_graphs) {
-            if (graph && graph->instance != nullptr) {
+        for (const auto & it : cuda_graphs) {
+            if (it.second && it.second->instance != nullptr) {
                 return true;
             }
         }
@@ -1638,4 +1648,3 @@ static __inline__ void ggml_cuda_kernel_launch(Kernel kernel, const ggml_cuda_ke
     kernel<<<launch_params.block_nums, launch_params.block_dims, launch_params.shmem, launch_params.stream>>>(std::forward<Args>(args)... );
     CUDA_CHECK(cudaGetLastError());
 }
-

@@ -27,11 +27,13 @@ if (CUDAToolkit_FOUND)
         if (GGML_NATIVE AND CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.6" AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.24")
             set(CMAKE_CUDA_ARCHITECTURES "native")
         else()
-            if (CUDAToolkit_VERSION VERSION_LESS "13")
+            if (CUDAToolkit_VERSION VERSION_LESS "11")
+                list(APPEND CMAKE_CUDA_ARCHITECTURES 50-virtual 61-virtual 70-virtual 75-virtual)
+            elseif (CUDAToolkit_VERSION VERSION_LESS "13")
                 list(APPEND CMAKE_CUDA_ARCHITECTURES 50-virtual 61-virtual 70-virtual)
-            endif ()
 
-            list(APPEND CMAKE_CUDA_ARCHITECTURES 75-virtual 80-virtual 86-real)
+                list(APPEND CMAKE_CUDA_ARCHITECTURES 75-virtual 80-virtual 86-real)
+            endif ()
 
             if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.8")
                 list(APPEND CMAKE_CUDA_ARCHITECTURES 89-real 90-virtual)
@@ -57,6 +59,14 @@ if (CUDAToolkit_FOUND)
     endif()
 
     enable_language(CUDA)
+
+    if (CUDAToolkit_VERSION VERSION_LESS "11")
+        if (NOT "cuda_std_17" IN_LIST CMAKE_CUDA_COMPILE_FEATURES)
+            list(APPEND CMAKE_CUDA_COMPILE_FEATURES cuda_std_17)
+        endif()
+        set(CMAKE_CUDA17_STANDARD_COMPILE_OPTION "")
+        set(CMAKE_CUDA17_EXTENSION_COMPILE_OPTION "")
+    endif()
 
     # TODO: Remove once CCCL 3.2 has been released and bundled with CUDA Toolkit
     if (GGML_CUDA_CUB_3DOT2)
@@ -114,14 +124,20 @@ if (CUDAToolkit_FOUND)
 
     if (GGML_CUDA_FA_ALL_QUANTS)
         file(GLOB   SRCS "template-instances/fattn-vec*.cu")
+        if (CUDAToolkit_VERSION VERSION_LESS "11")
+            list(FILTER SRCS EXCLUDE REGEX "bf16")
+        endif()
         list(APPEND GGML_SOURCES_CUDA ${SRCS})
         add_compile_definitions(GGML_CUDA_FA_ALL_QUANTS)
     else()
         list(APPEND GGML_SOURCES_CUDA
             template-instances/fattn-vec-instance-f16-f16.cu
             template-instances/fattn-vec-instance-q4_0-q4_0.cu
-            template-instances/fattn-vec-instance-q8_0-q8_0.cu
-            template-instances/fattn-vec-instance-bf16-bf16.cu)
+            template-instances/fattn-vec-instance-q8_0-q8_0.cu)
+        if (NOT CUDAToolkit_VERSION VERSION_LESS "11")
+            list(APPEND GGML_SOURCES_CUDA
+                template-instances/fattn-vec-instance-bf16-bf16.cu)
+        endif()
     endif()
 
     ggml_add_backend_library(ggml-cuda

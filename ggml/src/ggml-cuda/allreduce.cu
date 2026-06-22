@@ -386,7 +386,7 @@ static void ggml_cuda_ar_wait_for_compute(
         ggml_cuda_ar_pipeline * p, ggml_backend_cuda_context * cuda_ctx, int rank, int slot) {
     ggml_cuda_ar_event_slot & ev = p->ev_pool[rank][slot];
     CUDA_CHECK(cudaEventRecord(ev.app, cuda_ctx->stream()));
-    CUDA_CHECK(cudaStreamWaitEvent(p->streams[rank], ev.app));
+    CUDA_CHECK(cudaStreamWaitEvent(p->streams[rank], ev.app, 0));
 }
 
 // ---------------------------------------------------------------------------
@@ -626,7 +626,7 @@ static bool ggml_cuda_ar_allreduce_copy_impl(
         // No-op on the first AR -- no prior record exists.
         if (p->host_large_read_done_valid) {
             const int peer = 1 - i;
-            CUDA_CHECK(cudaStreamWaitEvent(p->streams[i], p->host_large_read_done[peer]));
+            CUDA_CHECK(cudaStreamWaitEvent(p->streams[i], p->host_large_read_done[peer], 0));
         }
 
         if (!compute[i]) {
@@ -660,7 +660,7 @@ static bool ggml_cuda_ar_allreduce_copy_impl(
         // finish reading dev_tmp before our H2D overwrites it.  No-op on the
         // first copy_impl call.
         if (p->dev_tmp_kernel_done_valid) {
-            CUDA_CHECK(cudaStreamWaitEvent(p->streams[i], p->dev_tmp_kernel_done[i]));
+            CUDA_CHECK(cudaStreamWaitEvent(p->streams[i], p->dev_tmp_kernel_done[i], 0));
         }
 
         for (size_t c = 0; c < copy_chunks; ++c) {
@@ -668,7 +668,7 @@ static bool ggml_cuda_ar_allreduce_copy_impl(
             const size_t this_bytes = (nbytes - offset) < chunk_bytes ?
                 (nbytes - offset) : chunk_bytes;
 
-            CUDA_CHECK(cudaStreamWaitEvent(p->streams[i], p->ev_pool[peer][slot].cpy[c]));
+            CUDA_CHECK(cudaStreamWaitEvent(p->streams[i], p->ev_pool[peer][slot].cpy[c], 0));
             CUDA_CHECK(cudaMemcpyAsync(
                 p->dev_tmp[i] + offset, p->host_large[peer].host + offset, this_bytes,
                 cudaMemcpyHostToDevice, p->streams[i]));
@@ -681,7 +681,7 @@ static bool ggml_cuda_ar_allreduce_copy_impl(
         // Hand off from AR stream (copy engine) to compute stream: compute
         // stream waits for all H2Ds to finish, then runs the add_kernel.
         CUDA_CHECK(cudaEventRecord(p->ev_pool[i][slot].h2d, p->streams[i]));
-        CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx[i]->stream(), p->ev_pool[i][slot].h2d));
+        CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx[i]->stream(), p->ev_pool[i][slot].h2d, 0));
 
         const int block_size = 256;
         int n_blocks = (int) ((ne + block_size - 1) / block_size);
@@ -750,7 +750,7 @@ bool ggml_cuda_ar_allreduce(
     GGML_ASSERT(n == 2);
 
     const ggml_type input_type = tensors[0]->type;
-    GGML_ASSERT(input_type == GGML_TYPE_F32 || input_type == GGML_TYPE_F16 || input_type == GGML_TYPE_BF16);
+    GGML_ASSERT(input_type == GGML_TYPE_F32 || input_type == GGML_TYPE_F16 || (GGML_CUDA_HAS_BF16 && input_type == GGML_TYPE_BF16));
 
     const int64_t ne = ggml_nelements(tensors[0]);
     GGML_ASSERT(ne > 0);
@@ -762,6 +762,7 @@ bool ggml_cuda_ar_allreduce(
     // NCCL's behaviour. The pre-conversion zeroes inactive shards so the
     // inner paths see them as already-prepared compute tensors.
     const bool use_bf16 =
+        GGML_CUDA_HAS_BF16 &&
         input_type == GGML_TYPE_F32 &&
         p->bf16_threshold > 0 &&
         input_nbytes >= p->bf16_threshold;
@@ -801,7 +802,10 @@ bool ggml_cuda_ar_allreduce(
     // Pre-convert F32 -> BF16 into bf16_tmp ONLY for the copy_engine + use_bf16
     // path; the chunked kernel path's combined kernel does the conversion
     // inline as it writes to host_buf.
+#if GGML_CUDA_HAS_BF16
     ggml_cuda_pool_alloc<nv_bfloat16> bf16_tmp[GGML_CUDA_MAX_DEVICES];
+#endif // GGML_CUDA_HAS_BF16
+#if GGML_CUDA_HAS_BF16
     void * copy_src_ptr[GGML_CUDA_MAX_DEVICES] = {};
 
     if (use_copy_engine && use_bf16) {
@@ -821,6 +825,7 @@ bool ggml_cuda_ar_allreduce(
             copy_src_ptr[i] = bf16_tmp[i].get();
         }
     }
+#endif // GGML_CUDA_HAS_BF16
 
     bool ok = true;
     if (use_copy_engine) {
@@ -837,6 +842,7 @@ bool ggml_cuda_ar_allreduce(
         // is F32 (dst = tensors[i]->data); the combined add kernel rounds dst
         // through BF16 for bit-equivalence and writes F32 directly, so no
         // post-conversion is needed.  Otherwise src == dst (same native type).
+#if GGML_CUDA_HAS_BF16
         if (use_bf16) {
             GGML_ASSERT(kernel_type == GGML_TYPE_BF16);
             nv_bfloat16 * src[GGML_CUDA_MAX_DEVICES] = {};
@@ -847,7 +853,9 @@ bool ggml_cuda_ar_allreduce(
             }
             ok = ggml_cuda_ar_allreduce_copy_outer<nv_bfloat16, float>(
                 p, backends, src, dst, inner_compute, ne);
-        } else {
+        } else
+#endif // GGML_CUDA_HAS_BF16
+        {
             switch (kernel_type) {
                 case GGML_TYPE_F32: {
                     float * buf[GGML_CUDA_MAX_DEVICES] = {};
@@ -858,6 +866,7 @@ bool ggml_cuda_ar_allreduce(
                         p, backends, buf, buf, inner_compute, ne);
                     break;
                 }
+#if GGML_CUDA_HAS_BF16
                 case GGML_TYPE_BF16: {
                     nv_bfloat16 * buf[GGML_CUDA_MAX_DEVICES] = {};
                     for (int i = 0; i < n; ++i) {
@@ -867,6 +876,7 @@ bool ggml_cuda_ar_allreduce(
                         p, backends, buf, buf, inner_compute, ne);
                     break;
                 }
+#endif // GGML_CUDA_HAS_BF16
                 case GGML_TYPE_F16: {
                     half * buf[GGML_CUDA_MAX_DEVICES] = {};
                     for (int i = 0; i < n; ++i) {
@@ -897,7 +907,9 @@ bool ggml_cuda_ar_allreduce(
             const size_t chunk_elems = remaining_elems < max_chunk_elems ? remaining_elems : max_chunk_elems;
             const size_t chunk_dst_bytes  = chunk_elems * input_type_size;
 
-            const auto [slot, token] = ggml_cuda_ar_acquire_slot(p);
+            const ggml_cuda_ar_slot_info slot_info = ggml_cuda_ar_acquire_slot(p);
+            const int slot = slot_info.slot;
+            const uint64_t token = slot_info.token;
             const bool last_chunk = chunk_start + (int64_t) chunk_elems == ne;
 
             for (int i = 0; i < n; ++i) {
@@ -927,14 +939,19 @@ bool ggml_cuda_ar_allreduce(
                     ggml_cuda_ar_arrival_ptr(p, slot, peer), \
                     token)
 
+#if GGML_CUDA_HAS_BF16
                 if (use_bf16) {
                     GGML_ASSERT(input_type == GGML_TYPE_F32);
                     LAUNCH_AR_KERNEL(float, nv_bfloat16);
-                } else {
+                } else
+#endif // GGML_CUDA_HAS_BF16
+                {
                     switch (input_type) {
                         case GGML_TYPE_F32:  LAUNCH_AR_KERNEL(float,       float);       break;
                         case GGML_TYPE_F16:  LAUNCH_AR_KERNEL(half,        half);        break;
+#if GGML_CUDA_HAS_BF16
                         case GGML_TYPE_BF16: LAUNCH_AR_KERNEL(nv_bfloat16, nv_bfloat16); break;
+#endif // GGML_CUDA_HAS_BF16
                         default: GGML_ASSERT(false);
                     }
                 }

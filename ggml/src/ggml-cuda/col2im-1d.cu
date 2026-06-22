@@ -70,11 +70,13 @@ void ggml_cuda_op_col2im_1d(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
                 (const half *)src0->data, (half *)dst->data,
                 T_in, T_out_fd, OC, K, K_OC, s0, p0, total);
         } break;
+#if GGML_CUDA_HAS_BF16
         case GGML_TYPE_BF16: {
             col2im_1d_kernel<<<num_blocks, block_size, 0, stream>>>(
                 (const nv_bfloat16 *)src0->data, (nv_bfloat16 *)dst->data,
                 T_in, T_out_fd, OC, K, K_OC, s0, p0, total);
         } break;
+#endif // GGML_CUDA_HAS_BF16
         default:
             GGML_ABORT("col2im_1d: unsupported type");
     }

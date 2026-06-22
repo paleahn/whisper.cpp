@@ -70,7 +70,6 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <charconv>
 #include <cinttypes>
 #include <condition_variable>
 #include <cstddef>
@@ -1221,6 +1220,7 @@ static bool ggml_backend_cuda_comm_allreduce_nccl(
         return true;
     }
 
+#if GGML_CUDA_HAS_BF16
     // For large tensors it's faster to compress them to BF16 for the reduction:
     to_bf16_cuda_t to_bf16 = ggml_get_to_bf16_cuda(GGML_TYPE_F32);
     to_fp32_cuda_t to_fp32 = ggml_get_to_fp32_cuda(GGML_TYPE_BF16);
@@ -1256,6 +1256,9 @@ static bool ggml_backend_cuda_comm_allreduce_nccl(
     }
 
     return true;
+#else
+    return false;
+#endif // GGML_CUDA_HAS_BF16
 }
 #endif // GGML_USE_NCCL
 
@@ -1272,7 +1275,7 @@ static bool ggml_backend_cuda_comm_allreduce_internal(
     const int64_t   ne   = ggml_nelements(tensors[0]);
     const ggml_type type = tensors[0]->type;
 
-    if (type != GGML_TYPE_F32 && type != GGML_TYPE_F16 && type != GGML_TYPE_BF16) {
+    if (type != GGML_TYPE_F32 && type != GGML_TYPE_F16 && !(GGML_CUDA_HAS_BF16 && type == GGML_TYPE_BF16)) {
         GGML_LOG_DEBUG("%s: internal unsupported: type=%d\n", __func__, (int) type);
         return false;
     }
@@ -1650,8 +1653,11 @@ static void ggml_cuda_op_mul_mat_cublas(
 
     const int cc = ggml_cuda_info().devices[id].cc;
 
-    const bool supports_bf16 = GGML_CUDA_CC_IS_NVIDIA(cc) || GGML_CUDA_CC_IS_AMD(cc) ||
-        (GGML_CUDA_CC_IS_MTHREADS(cc) && cc >= GGML_CUDA_CC_QY2);
+    const bool supports_bf16 = GGML_CUDA_HAS_BF16 && (GGML_CUDA_CC_IS_NVIDIA(cc) || GGML_CUDA_CC_IS_AMD(cc) ||
+        (GGML_CUDA_CC_IS_MTHREADS(cc) && cc >= GGML_CUDA_CC_QY2));
+#if !GGML_CUDA_HAS_BF16
+    GGML_UNUSED(supports_bf16);
+#endif // !GGML_CUDA_HAS_BF16
 
     const bool use_fp16 =
         src0->type != GGML_TYPE_NVFP4 &&
@@ -1660,6 +1666,7 @@ static void ggml_cuda_op_mul_mat_cublas(
         row_diff == src0->ne[1] &&
         dst->op_params[0] == GGML_PREC_DEFAULT;
 
+#if GGML_CUDA_HAS_BF16
     if (supports_bf16 && src0->type == GGML_TYPE_BF16 && ggml_is_contiguous(src0) && row_diff == src0->ne[1]) {
         ggml_cuda_pool_alloc<nv_bfloat16> src1_as_bf16(ctx.pool(id));
         if (src1->type != GGML_TYPE_BF16) {
@@ -1688,7 +1695,9 @@ static void ggml_cuda_op_mul_mat_cublas(
 
         const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_BF16);
         to_fp32_cuda(dst_bf16.get(), dst_dd_i, row_diff*src1_ncols, stream);
-    } else if (fast_fp16_hardware_available(cc) && use_fp16) {
+    } else
+#endif // GGML_CUDA_HAS_BF16
+    if (fast_fp16_hardware_available(cc) && use_fp16) {
         // convert src0 and src1 to fp16, multiply as fp16, convert dst to fp32
         ggml_cuda_pool_alloc<half> src0_as_f16(ctx.pool(id));
         if (src0->type != GGML_TYPE_F16) {
@@ -2153,39 +2162,32 @@ struct batched_mul_mat_traits;
 template<>
 struct batched_mul_mat_traits<GGML_TYPE_F32> {
     using cuda_type = float;
-    static inline const cublasComputeType_t compute_type = CUBLAS_COMPUTE_32F;
-    static inline const cudaDataType_t data_type = CUDA_R_32F;
-    static inline const ggml_type ggml_type_val = GGML_TYPE_F32;
-    static inline const float alpha = 1.0f;
-    static inline const float beta = 0.0f;
-    static inline const void* get_alpha() { static const float val = alpha; return &val; }
-    static inline const void* get_beta() { static const float val = beta; return &val; }
+    static cublasComputeType_t get_compute_type() { return CUBLAS_COMPUTE_32F; }
+    static cudaDataType_t get_data_type() { return CUDA_R_32F; }
+    static const void* get_alpha() { static const float val = 1.0f; return &val; }
+    static const void* get_beta() { static const float val = 0.0f; return &val; }
     static inline auto get_nc_converter(ggml_type src_type) { return ggml_get_to_fp32_nc_cuda(src_type); }
 };
 
+#if GGML_CUDA_HAS_BF16
 template<>
 struct batched_mul_mat_traits<GGML_TYPE_BF16> {
     using cuda_type = nv_bfloat16;
-    static inline const cublasComputeType_t compute_type = CUBLAS_COMPUTE_32F;
-    static inline const cudaDataType_t data_type = CUDA_R_16BF;
-    static inline const ggml_type ggml_type_val = GGML_TYPE_BF16;
-    static inline const float alpha = 1.0f;
-    static inline const float beta = 0.0f;
-    static inline const void* get_alpha() { static const float val = alpha; return &val; }
-    static inline const void* get_beta() { static const float val = beta; return &val; }
+    static cublasComputeType_t get_compute_type() { return CUBLAS_COMPUTE_32F; }
+    static cudaDataType_t get_data_type() { return CUDA_R_16BF; }
+    static const void* get_alpha() { static const float val = 1.0f; return &val; }
+    static const void* get_beta() { static const float val = 0.0f; return &val; }
     static inline auto get_nc_converter(ggml_type src_type) { return ggml_get_to_bf16_nc_cuda(src_type); }
 };
+#endif // GGML_CUDA_HAS_BF16
 
 template<>
 struct batched_mul_mat_traits<GGML_TYPE_F16> {
     using cuda_type = half;
-    static inline const cublasComputeType_t compute_type = CUBLAS_COMPUTE_16F;
-    static inline const cudaDataType_t data_type = CUDA_R_16F;
-    static inline const ggml_type ggml_type_val = GGML_TYPE_F16;
-    static inline const half alpha = 1.0;
-    static inline const half beta = 0.0;
-    static inline const void* get_alpha() { static const half val = alpha; return &val; }
-    static inline const void* get_beta() { static const half val = beta; return &val; }
+    static cublasComputeType_t get_compute_type() { return CUBLAS_COMPUTE_16F; }
+    static cudaDataType_t get_data_type() { return CUDA_R_16F; }
+    static const void* get_alpha() { static const half val = 1.0; return &val; }
+    static const void* get_beta() { static const half val = 0.0; return &val; }
     static inline auto get_nc_converter(ggml_type src_type) { return ggml_get_to_fp16_nc_cuda(src_type); }
 };
 
@@ -2253,10 +2255,10 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
     size_t nbd2 = dst->nb[2];
     size_t nbd3 = dst->nb[3];
 
-    cublasComputeType_t cu_compute_type = traits::compute_type;
-    cudaDataType_t cu_data_type = traits::data_type;
-    cudaDataType_t cu_data_type_a = traits::data_type;
-    cudaDataType_t cu_data_type_b = traits::data_type;
+    cublasComputeType_t cu_compute_type = traits::get_compute_type();
+    cudaDataType_t cu_data_type = traits::get_data_type();
+    cudaDataType_t cu_data_type_a = traits::get_data_type();
+    cudaDataType_t cu_data_type_b = traits::get_data_type();
     const void * alpha = traits::get_alpha();
     const void * beta = traits::get_beta();
 
@@ -2268,7 +2270,7 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
 
     // bf16 and fp32 are already being computed in fp32 (ensure it using static_assert),
     // so checking necessity of forced fp32 only for fp16 src0_type
-    static_assert(is_src0_type_f16 || traits::compute_type == CUBLAS_COMPUTE_32F);
+    static_assert(is_src0_type_f16 || src0_type == GGML_TYPE_F32 || src0_type == GGML_TYPE_BF16);
 
     const bool need_compute_32f = is_src0_type_f16 && !force_compute_type.fp16 && (GGML_CUDA_CC_IS_CDNA(cc)
                                                                                   || GGML_CUDA_CC_IS_RDNA4(cc)
@@ -2285,8 +2287,8 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
         }
     } else {
         dst_t = (char *) dst_ddf;
-        cu_compute_type = batched_mul_mat_traits<GGML_TYPE_F32>::compute_type;
-        cu_data_type = batched_mul_mat_traits<GGML_TYPE_F32>::data_type;
+        cu_compute_type = batched_mul_mat_traits<GGML_TYPE_F32>::get_compute_type();
+        cu_data_type = batched_mul_mat_traits<GGML_TYPE_F32>::get_data_type();
         alpha = batched_mul_mat_traits<GGML_TYPE_F32>::get_alpha();
         beta = batched_mul_mat_traits<GGML_TYPE_F32>::get_beta();
     }
@@ -2357,21 +2359,23 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
 
     // Convert output back to F32 if needed
     if (dst->op_params[0] == GGML_PREC_DEFAULT && cu_data_type != CUDA_R_32F) {
-        const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(traits::ggml_type_val);
+        const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(src0_type);
         to_fp32_cuda(dst_temp.get(), dst_ddf, ne_dst, main_stream);
     }
 }
 
 static void ggml_cuda_mul_mat_batched_cublas(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-    GGML_ASSERT(src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16 || src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src0->type == GGML_TYPE_F16 || (GGML_CUDA_HAS_BF16 && src0->type == GGML_TYPE_BF16) || src0->type == GGML_TYPE_F32);
 
     switch (src0->type) {
         case GGML_TYPE_F32:
             ggml_cuda_mul_mat_batched_cublas_impl<GGML_TYPE_F32>(ctx, src0, src1, dst);
             break;
+#if GGML_CUDA_HAS_BF16
         case GGML_TYPE_BF16:
             ggml_cuda_mul_mat_batched_cublas_impl<GGML_TYPE_BF16>(ctx, src0, src1, dst);
             break;
+#endif // GGML_CUDA_HAS_BF16
         case GGML_TYPE_F16:
             ggml_cuda_mul_mat_batched_cublas_impl<GGML_TYPE_F16>(ctx, src0, src1, dst);
             break;
@@ -2450,7 +2454,8 @@ static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * ffn_up,
         return false;
     }
 
-    if (const bool swapped = ggml_get_op_params_i32(glu, 1); swapped) {
+    const bool swapped = ggml_get_op_params_i32(glu, 1);
+    if (swapped) {
         return false;
     }
 
@@ -2473,7 +2478,7 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_f(const ggml_tensor * tensor) {
     const bool is_mul_mat_id = tensor->op == GGML_OP_MUL_MAT_ID;
 
     bool use_mul_mat_vec_f =
-        (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16) &&
+        (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || (GGML_CUDA_HAS_BF16 && src0->type == GGML_TYPE_BF16)) &&
         src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
 
     const int cc      = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
@@ -2547,9 +2552,9 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     const bool bad_padding_clear = ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE
         && ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) && src0->view_src;
 
-    bool use_mul_mat_vec_f = (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16)
+    bool use_mul_mat_vec_f = (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || (GGML_CUDA_HAS_BF16 && src0->type == GGML_TYPE_BF16))
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
-    bool use_mul_mat_f     = !ggml_is_quantized(src0->type)
+    bool use_mul_mat_f     = !(src0->type == GGML_TYPE_BF16 && !GGML_CUDA_HAS_BF16) && !ggml_is_quantized(src0->type)
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
     bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && !bad_padding_clear
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32
@@ -2597,7 +2602,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     //TODO update for generic tensor parallelism
     const int cc                 = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     bool use_batched_cublas_f16  = src0->type == GGML_TYPE_F16 && (src1->type == GGML_TYPE_F16 || !any_gpus_with_slow_fp16);
-    bool use_batched_cublas_bf16 = src0->type == GGML_TYPE_BF16 && bf16_mma_hardware_available(cc);
+    bool use_batched_cublas_bf16 = GGML_CUDA_HAS_BF16 && src0->type == GGML_TYPE_BF16 && bf16_mma_hardware_available(cc);
     bool use_batched_cublas_f32  = src0->type == GGML_TYPE_F32;
 
     const int32_t hint = ggml_get_op_params_i32(dst, 1);
@@ -3955,7 +3960,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         // float and templates the kernel on a single T. Mixed precision chains
         // fall back to the naive path.
         const ggml_tensor * sin1 = cgraph->nodes[i + 1];
-        const bool types_ok = (x->type == GGML_TYPE_F32 || x->type == GGML_TYPE_F16 || x->type == GGML_TYPE_BF16) &&
+        const bool types_ok = (x->type == GGML_TYPE_F32 || x->type == GGML_TYPE_F16 || (GGML_CUDA_HAS_BF16 && x->type == GGML_TYPE_BF16)) &&
                               (a->type    == x->type) && (inv_b->type == x->type) &&
                               (mul0->type == x->type) && (sin1->type  == x->type) &&
                               (sqr->type  == x->type) && (mul1->type  == x->type) &&
@@ -4259,7 +4264,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 
             for (int i = 1; i <= concurrent_event->n_streams; ++i) {
                 cudaStream_t stream = cuda_ctx->stream(cuda_ctx->device, i);
-                CUDA_CHECK(cudaStreamWaitEvent(stream, concurrent_event->fork_event));
+                CUDA_CHECK(cudaStreamWaitEvent(stream, concurrent_event->fork_event, 0));
             }
         }
     };
@@ -4272,8 +4277,8 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 
             if (stream_ctx.concurrent_events.size() > 0) {
                 should_launch_concurrent_events = true;
-                for (const auto & [tensor, event] : stream_ctx.concurrent_events) {
-                    should_launch_concurrent_events = should_launch_concurrent_events && event.is_valid();
+                for (const auto & it : stream_ctx.concurrent_events) {
+                    should_launch_concurrent_events = should_launch_concurrent_events && it.second.is_valid();
                 }
             }
 
@@ -4286,7 +4291,8 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                     node_to_idx[cgraph->nodes[i]] = i;
                 }
 
-                for (auto & [fork_node, event] : stream_ctx.concurrent_events) {
+                for (auto & it : stream_ctx.concurrent_events) {
+                    auto & event = it.second;
                     // Find positions of all nodes from this event in the current graph
                     std::vector<int> positions;
                     positions.reserve(event.original_order.size());
@@ -4343,7 +4349,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                             // Wait on join events of forked streams in the main stream
                             CUDA_CHECK(cudaEventRecord(concurrent_event->join_events[i - 1],
                                                        cuda_ctx->stream(cuda_ctx->device, i)));
-                            CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->stream(), concurrent_event->join_events[i - 1]));
+                            CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->stream(), concurrent_event->join_events[i - 1], 0));
                         }
 
                         is_concurrent_event_active = false;
@@ -4633,7 +4639,9 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
     // store {fork_idx, join_idx}
     std::vector<std::pair<int, int>> concurrent_node_ranges;
 
-    for (const auto & [root_node, count] : fan_out) {
+    for (const auto & it : fan_out) {
+        const ggml_tensor * root_node = it.first;
+        const int count = it.second;
         if (count >= min_fan_out && count <= max_fan_out) {
             const int root_node_idx = node_indices[root_node];
 
@@ -4644,8 +4652,8 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
             }
 
             bool is_part_of_event = false;
-            for (const auto & [start, end] : concurrent_node_ranges) {
-                if (root_node_idx >= start && root_node_idx <= end) {
+            for (const auto & it : concurrent_node_ranges) {
+                if (root_node_idx >= it.first && root_node_idx <= it.second) {
                     is_part_of_event = true;
                 }
             }
@@ -5179,8 +5187,9 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_IQ3_XXS:
                     case GGML_TYPE_IQ4_NL:
                     case GGML_TYPE_IQ4_XS:
-                    case GGML_TYPE_BF16:
                         return true;
+                    case GGML_TYPE_BF16:
+                        return GGML_CUDA_HAS_BF16;
                     default:
                         return false;
                 }
@@ -5192,7 +5201,6 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 switch (op->src[0]->type) {
                     case GGML_TYPE_F16:
                     case GGML_TYPE_F32:
-                    case GGML_TYPE_BF16:
                     case GGML_TYPE_I32:
                     case GGML_TYPE_Q1_0:
                     case GGML_TYPE_Q4_0:
@@ -5201,6 +5209,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_Q5_1:
                     case GGML_TYPE_Q8_0:
                         return true;
+                    case GGML_TYPE_BF16:
+                        return GGML_CUDA_HAS_BF16;
                     default:
                         return false;
                 }
@@ -5211,7 +5221,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             } break;
         case GGML_OP_SET_ROWS:
             {
-                return (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_BF16 ||
+                return (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16 || (GGML_CUDA_HAS_BF16 && op->type == GGML_TYPE_BF16) ||
                        op->type == GGML_TYPE_Q4_0 || op->type == GGML_TYPE_Q4_1 || op->type == GGML_TYPE_Q5_0 ||
                        op->type == GGML_TYPE_Q5_1 || op->type == GGML_TYPE_Q8_0 || op->type == GGML_TYPE_IQ4_NL) &&
                        op->src[0]->type == GGML_TYPE_F32 &&
@@ -5228,8 +5238,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             {
                 ggml_type src0_type = op->src[0]->type;
                 ggml_type src1_type = op->src[1]->type;
-                if ((src0_type == GGML_TYPE_F32 || src0_type == GGML_TYPE_BF16 || src0_type == GGML_TYPE_F16) &&
-                    (src1_type == GGML_TYPE_F32 || src1_type == GGML_TYPE_BF16 || src1_type == GGML_TYPE_F16)
+                if ((src0_type == GGML_TYPE_F32 || (GGML_CUDA_HAS_BF16 && src0_type == GGML_TYPE_BF16) || src0_type == GGML_TYPE_F16) &&
+                    (src1_type == GGML_TYPE_F32 || (GGML_CUDA_HAS_BF16 && src1_type == GGML_TYPE_BF16) || src1_type == GGML_TYPE_F16)
                 ) {
                     return true;
                 }
@@ -5323,7 +5333,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_COL2IM_1D:
             {
                 ggml_type src0_type = op->src[0]->type;
-                return (src0_type == GGML_TYPE_F32 || src0_type == GGML_TYPE_F16 || src0_type == GGML_TYPE_BF16) &&
+                return (src0_type == GGML_TYPE_F32 || src0_type == GGML_TYPE_F16 || (GGML_CUDA_HAS_BF16 && src0_type == GGML_TYPE_BF16)) &&
                     op->type == src0_type &&
                     ggml_is_contiguous(op->src[0]) &&
                     ggml_is_contiguous(op);

@@ -120,6 +120,7 @@ void ggml_cuda_op_tri(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
                     ttype, stream
                 );
             } break;
+#if GGML_CUDA_HAS_BF16
         case GGML_TYPE_BF16:
             {
                 tri_cuda(
@@ -130,6 +131,7 @@ void ggml_cuda_op_tri(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
                     ttype, stream
                 );
             } break;
+#endif // GGML_CUDA_HAS_BF16
         default:
             GGML_ABORT("fatal error");
     }

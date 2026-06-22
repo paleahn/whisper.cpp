@@ -6,6 +6,8 @@
 #include <hip/hip_fp16.h>
 #include <hip/hip_bf16.h>
 
+#define GGML_CUDA_HAS_BF16 1
+
 #if defined(GGML_HIP_ROCWMMA_FATTN)
 #include <rocwmma/rocwmma-version.hpp>
 #endif // defined(GGML_HIP_ROCWMMA_FATTN)

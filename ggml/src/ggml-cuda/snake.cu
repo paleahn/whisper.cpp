@@ -52,10 +52,12 @@ static void launch_snake(ggml_backend_cuda_context & ctx,
             snake_kernel<<<grid_size, block_size, 0, stream>>>(
                 (const half *)x->data, a_d, inv_b_d, (half *)dst->data, total, T_len_fastdiv);
         } break;
+#if GGML_CUDA_HAS_BF16
         case GGML_TYPE_BF16: {
             snake_kernel<<<grid_size, block_size, 0, stream>>>(
                 (const nv_bfloat16 *)x->data, a_d, inv_b_d, (nv_bfloat16 *)dst->data, total, T_len_fastdiv);
         } break;
+#endif // GGML_CUDA_HAS_BF16
         default:
             GGML_ABORT("snake: unsupported type");
     }
