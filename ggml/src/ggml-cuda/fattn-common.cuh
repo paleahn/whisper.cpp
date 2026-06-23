@@ -623,48 +623,46 @@ static __device__ __forceinline__ void dequantize_V_q8_0(const void * __restrict
 
 template <ggml_type type_K, int D, int nthreads>
 constexpr __device__ vec_dot_KQ_t get_vec_dot_KQ() {
-    if constexpr (type_K == GGML_TYPE_F16) {
+    if (type_K == GGML_TYPE_F16) {
         return vec_dot_fattn_vec_KQ_f16<D, nthreads>;
-    } else if constexpr (type_K == GGML_TYPE_Q4_0) {
+    } else if (type_K == GGML_TYPE_Q4_0) {
         return vec_dot_fattn_vec_KQ_q4_0<D, nthreads>;
-    } else if constexpr (type_K == GGML_TYPE_Q4_1) {
+    } else if (type_K == GGML_TYPE_Q4_1) {
         return vec_dot_fattn_vec_KQ_q4_1<D, nthreads>;
-    } else if constexpr (type_K == GGML_TYPE_Q5_0) {
+    } else if (type_K == GGML_TYPE_Q5_0) {
         return vec_dot_fattn_vec_KQ_q5_0<D, nthreads>;
-    } else if constexpr (type_K == GGML_TYPE_Q5_1) {
+    } else if (type_K == GGML_TYPE_Q5_1) {
         return vec_dot_fattn_vec_KQ_q5_1<D, nthreads>;
-    } else if constexpr (type_K == GGML_TYPE_Q8_0) {
+    } else if (type_K == GGML_TYPE_Q8_0) {
         return vec_dot_fattn_vec_KQ_q8_0<D, nthreads>;
 #if GGML_CUDA_HAS_BF16
-    } else if constexpr (type_K == GGML_TYPE_BF16) {
+    } else if (type_K == GGML_TYPE_BF16) {
         return vec_dot_fattn_vec_KQ_bf16<D, nthreads>;
 #endif // GGML_CUDA_HAS_BF16
     } else {
-        static_assert(type_K == -1, "bad type");
         return nullptr;
     }
 }
 
 template <ggml_type type_V, typename T, int ne>
 constexpr __device__ dequantize_V_t get_dequantize_V() {
-    if constexpr (type_V == GGML_TYPE_F16) {
+    if (type_V == GGML_TYPE_F16) {
         return dequantize_V_f16<T, ne>;
-    } else if constexpr (type_V == GGML_TYPE_Q4_0) {
+    } else if (type_V == GGML_TYPE_Q4_0) {
         return dequantize_V_q4_0<T, ne>;
-    } else if constexpr (type_V == GGML_TYPE_Q4_1) {
+    } else if (type_V == GGML_TYPE_Q4_1) {
         return dequantize_V_q4_1<T, ne>;
-    } else if constexpr (type_V == GGML_TYPE_Q5_0) {
+    } else if (type_V == GGML_TYPE_Q5_0) {
         return dequantize_V_q5_0<T, ne>;
-    } else if constexpr (type_V == GGML_TYPE_Q5_1) {
+    } else if (type_V == GGML_TYPE_Q5_1) {
         return dequantize_V_q5_1<T, ne>;
-    } else if constexpr (type_V == GGML_TYPE_Q8_0) {
+    } else if (type_V == GGML_TYPE_Q8_0) {
         return dequantize_V_q8_0<T, ne>;
 #if GGML_CUDA_HAS_BF16
-    } else if constexpr (type_V == GGML_TYPE_BF16) {
+    } else if (type_V == GGML_TYPE_BF16) {
         return dequantize_V_bf16<float, ne>;
 #endif // GGML_CUDA_HAS_BF16
     } else {
-        static_assert(type_V == -1, "bad type");
         return nullptr;
     }
 }

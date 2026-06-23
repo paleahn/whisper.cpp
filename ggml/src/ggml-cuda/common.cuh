@@ -581,45 +581,85 @@ struct ggml_cuda_dependent_false : std::false_type {};
 
 template <typename T> struct block_reduce_policy<block_reduce_method::SUM, T> {
     static __device__ T reduce(T val) {
-        if constexpr(is_any<T, float, float2, half2, int>::value) {
-            return warp_reduce_sum(val);
-        } else {
-            static_assert(ggml_cuda_dependent_false<T>::value, "Unsupported type for block reduce sum");
-        }
+        static_assert(ggml_cuda_dependent_false<T>::value, "Unsupported type for block reduce sum");
+        return val;
     }
 
     static __device__ T sentinel() {
-        if constexpr (std::is_same<T, float>::value) {
-            return 0.0f;
-        } else if constexpr (std::is_same<T, float2>::value) {
-            return make_float2(0.0f, 0.0f);
-        } else if constexpr (std::is_same<T, half2>::value) {
-            return make_half2(0.0f, 0.0f);
-        } else if constexpr (std::is_same<T, int>::value) {
-            return 0;
-        } else {
-            static_assert(ggml_cuda_dependent_false<T>::value, "Unsupported type for block reduce sum");
-        }
+        static_assert(ggml_cuda_dependent_false<T>::value, "Unsupported type for block reduce sum");
+        return T();
+    }
+};
+
+template <> struct block_reduce_policy<block_reduce_method::SUM, float> {
+    static __device__ float reduce(float val) {
+        return warp_reduce_sum(val);
+    }
+
+    static __device__ float sentinel() {
+        return 0.0f;
+    }
+};
+
+template <> struct block_reduce_policy<block_reduce_method::SUM, float2> {
+    static __device__ float2 reduce(float2 val) {
+        return warp_reduce_sum(val);
+    }
+
+    static __device__ float2 sentinel() {
+        return make_float2(0.0f, 0.0f);
+    }
+};
+
+template <> struct block_reduce_policy<block_reduce_method::SUM, half2> {
+    static __device__ half2 reduce(half2 val) {
+        return warp_reduce_sum(val);
+    }
+
+    static __device__ half2 sentinel() {
+        return make_half2(0.0f, 0.0f);
+    }
+};
+
+template <> struct block_reduce_policy<block_reduce_method::SUM, int> {
+    static __device__ int reduce(int val) {
+        return warp_reduce_sum(val);
+    }
+
+    static __device__ int sentinel() {
+        return 0;
     }
 };
 
 template <typename T> struct block_reduce_policy<block_reduce_method::MAX, T> {
     static __device__ T reduce(T val) {
-        if constexpr (is_any<T, float, half2>::value) {
-            return warp_reduce_max(val);
-        } else {
-            static_assert(ggml_cuda_dependent_false<T>::value, "Unsupported type for block reduce max");
-        }
+        static_assert(ggml_cuda_dependent_false<T>::value, "Unsupported type for block reduce max");
+        return val;
     }
 
     static __device__ T sentinel() {
-        if constexpr (std::is_same<T, float>::value) {
-            return -INFINITY;
-        } else if constexpr (std::is_same<T, half2>::value) {
-            return make_half2(-INFINITY, -INFINITY);
-        } else {
-            static_assert(ggml_cuda_dependent_false<T>::value, "Unsupported type for block reduce max");
-        }
+        static_assert(ggml_cuda_dependent_false<T>::value, "Unsupported type for block reduce max");
+        return T();
+    }
+};
+
+template <> struct block_reduce_policy<block_reduce_method::MAX, float> {
+    static __device__ float reduce(float val) {
+        return warp_reduce_max(val);
+    }
+
+    static __device__ float sentinel() {
+        return -INFINITY;
+    }
+};
+
+template <> struct block_reduce_policy<block_reduce_method::MAX, half2> {
+    static __device__ half2 reduce(half2 val) {
+        return warp_reduce_max(val);
+    }
+
+    static __device__ half2 sentinel() {
+        return make_half2(-INFINITY, -INFINITY);
     }
 };
 

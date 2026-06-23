@@ -19,7 +19,7 @@ static __global__ void __launch_bounds__(CUDA_CONCAT_BLOCK_SIZE) concat_cont(con
 
     ggml_cuda_pdl_sync();
     for (int64_t i = (int64_t) blockIdx.x * blockDim.x + threadIdx.x; i < n; i += (int64_t) blockDim.x * gridDim.x) {
-        if constexpr (dim == 0) {
+        if (dim == 0) {
             const int64_t row = i / ne0;
             const int64_t i0  = i - row * ne0;
 
@@ -28,7 +28,7 @@ static __global__ void __launch_bounds__(CUDA_CONCAT_BLOCK_SIZE) concat_cont(con
             } else {
                 dst[i] = y[row * (ne0 - ne00) + (i0 - ne00)];
             }
-        } else if constexpr (dim == 1) {
+        } else if (dim == 1) {
             const int64_t dst_plane  = ne0 * ne1;
             const int64_t src0_plane = ne0 * ne01;
             const int64_t src1_plane = dst_plane - src0_plane;
@@ -122,13 +122,13 @@ static __global__ void __launch_bounds__(CUDA_CONCAT_BLOCK_SIZE)
         if (i0 < ne00 && i1 < ne01 && i2 < ne02 && i3 < ne03) {
             x = (const T *)(src0 + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
         } else {
-            if constexpr (dim == 0) {
+            if (dim == 0) {
                 x = (const T *)(src1 + i3*nb13 + i2*nb12 + i1*nb11 + (i0 - ne00)*nb10);
-            } else if constexpr (dim == 1) {
+            } else if (dim == 1) {
                 x = (const T *)(src1 + i3*nb13 + i2*nb12 + (i1 - ne01)*nb11 + i0*nb10);
-            } else if constexpr (dim == 2) {
+            } else if (dim == 2) {
                 x = (const T *)(src1 + i3*nb13 + (i2 - ne02)*nb12 + i1*nb11 + i0*nb10);
-            } else if constexpr (dim == 3) {
+            } else if (dim == 3) {
                 x = (const T *)(src1 + (i3 - ne03)*nb13 + i2*nb12 + i1*nb11 + i0*nb10);
             }
         }
