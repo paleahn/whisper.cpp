@@ -258,10 +258,6 @@ endif()
 
 target_link_libraries(ggml PUBLIC ggml-base)
 
-if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9)
-    target_link_libraries(ggml PRIVATE stdc++fs)
-endif()
-
 if (CMAKE_SYSTEM_NAME MATCHES "Linux")
     target_link_libraries(ggml PRIVATE dl)
 endif()

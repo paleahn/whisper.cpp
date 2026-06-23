@@ -70,6 +70,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <charconv>
 #include <cinttypes>
 #include <condition_variable>
 #include <cstddef>

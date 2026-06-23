@@ -64,8 +64,8 @@ if (CUDAToolkit_FOUND)
         if (NOT "cuda_std_17" IN_LIST CMAKE_CUDA_COMPILE_FEATURES)
             list(APPEND CMAKE_CUDA_COMPILE_FEATURES cuda_std_17)
         endif()
-        set(CMAKE_CUDA17_STANDARD_COMPILE_OPTION "")
-        set(CMAKE_CUDA17_EXTENSION_COMPILE_OPTION "")
+        set(CMAKE_CUDA17_STANDARD_COMPILE_OPTION "-std=c++17")
+        set(CMAKE_CUDA17_EXTENSION_COMPILE_OPTION "-std=c++17")
     endif()
 
     # TODO: Remove once CCCL 3.2 has been released and bundled with CUDA Toolkit

@@ -26,30 +26,6 @@ static __device__ __forceinline__ float op_div(const float a, const float b) {
     return a / b;
 }
 
-template <float (*bin_op)(const float, const float), typename src1_t>
-static __device__ __forceinline__ float bin_bcast_apply(float result, const size_t i_src1, const src1_t * src1) {
-    return bin_op(result, (float) src1[i_src1]);
-}
-
-template <float (*bin_op)(const float, const float)>
-static __device__ __forceinline__ float bin_bcast_apply_extra(float result, const size_t i_src1) {
-    GGML_UNUSED(i_src1);
-    return result;
-}
-
-template <float (*bin_op)(const float, const float), typename src1_ptr, typename... src1_ptrs>
-static __device__ __forceinline__ float bin_bcast_apply_extra(float result, const size_t i_src1, src1_ptr src1_cur, src1_ptrs... src1s) {
-    result = bin_op(result, (float) src1_cur[i_src1]);
-    return bin_bcast_apply_extra<bin_op>(result, i_src1, src1s...);
-}
-
-template <float (*bin_op)(const float, const float), typename src1_t, typename src1_ptr, typename... src1_ptrs>
-static __device__ __forceinline__ float bin_bcast_apply(
-        float result, const size_t i_src1, const src1_t * src1, src1_ptr src1_cur, src1_ptrs... src1s) {
-    GGML_UNUSED(src1);
-    return bin_bcast_apply_extra<bin_op>(result, i_src1, src1_cur, src1s...);
-}
-
 template <float (*bin_op)(const float, const float),
           typename src0_t,
           typename src1_t,
@@ -105,7 +81,11 @@ static __global__ void k_bin_bcast(const src0_t *         src0,
         const uint32_t i10 = fastmodulo(i0, ne10);
 
         float result = src0_row ? (float) src0_row[i0*s00] : 0.0f;
-        result = bin_bcast_apply<bin_op>(result, i_src1 + i10*s10, src1, src1s...);
+        if constexpr (sizeof...(src1_ptrs) > 0) {
+            result = (..., (result = bin_op(result, (float)src1s[i_src1 + i10*s10])));
+        } else {
+            result = bin_op(result, (float)src1[i_src1 + i10*s10]);
+        }
 
         dst_row[i0] = (dst_t) result;
     }
@@ -168,7 +148,11 @@ static __global__ void k_bin_bcast_unravel(const src0_t *         src0,
 
     ggml_cuda_pdl_sync();
     float result = src0_row ? (float) src0_row[i0*s00] : 0.0f;
-    result = bin_bcast_apply<bin_op>(result, i_src1 + i10*s10, src1, src1s...);
+    if constexpr (sizeof...(src1_ptrs) > 0) {
+        result = (..., (result = bin_op(result, (float)src1s[i_src1 + i10*s10])));
+    } else {
+        result = bin_op(result, (float)src1[i_src1 + i10*s10]);
+    }
 
     dst_row[i0] = (dst_t) result;
 }

@@ -570,55 +570,52 @@ enum class block_reduce_method {
 template<block_reduce_method method_t, typename T>
 struct block_reduce_policy;
 
-template <typename T, typename... Ts>
-struct is_any : std::false_type {};
-
-template <typename T, typename U, typename... Ts>
-struct is_any<T, U, Ts...> : std::conditional<std::is_same<T, U>::value, std::true_type, is_any<T, Ts...>>::type {};
+template<typename T, typename... Ts>
+inline constexpr bool is_any = (std::is_same_v<T, Ts> || ...);
 
 template<typename>
-struct ggml_cuda_dependent_false : std::false_type {};
+inline constexpr bool ggml_cuda_dependent_false_v = false;
 
 template <typename T> struct block_reduce_policy<block_reduce_method::SUM, T> {
     static __device__ T reduce(T val) {
-        if constexpr(is_any<T, float, float2, half2, int>::value) {
+        if constexpr(is_any<T, float, float2, half2, int>) {
             return warp_reduce_sum(val);
         } else {
-            static_assert(ggml_cuda_dependent_false<T>::value, "Unsupported type for block reduce sum");
+            static_assert(ggml_cuda_dependent_false_v<T>, "Unsupported type for block reduce sum");
         }
     }
 
     static __device__ T sentinel() {
-        if constexpr (std::is_same<T, float>::value) {
+        if constexpr (std::is_same_v<T, float>) {
             return 0.0f;
-        } else if constexpr (std::is_same<T, float2>::value) {
+        } else if constexpr (std::is_same_v<T, float2>) {
             return make_float2(0.0f, 0.0f);
-        } else if constexpr (std::is_same<T, half2>::value) {
+        } else if constexpr (std::is_same_v<T, half2>) {
             return make_half2(0.0f, 0.0f);
-        } else if constexpr (std::is_same<T, int>::value) {
+        } else if constexpr (std::is_same_v<T, int>) {
             return 0;
         } else {
-            static_assert(ggml_cuda_dependent_false<T>::value, "Unsupported type for block reduce sum");
+            static_assert(ggml_cuda_dependent_false_v<T>, "Unsupported type for block reduce sum");
         }
     }
 };
 
 template <typename T> struct block_reduce_policy<block_reduce_method::MAX, T> {
     static __device__ T reduce(T val) {
-        if constexpr (is_any<T, float, half2>::value) {
+        if constexpr (is_any<T, float, half2>) {
             return warp_reduce_max(val);
         } else {
-            static_assert(ggml_cuda_dependent_false<T>::value, "Unsupported type for block reduce max");
+            static_assert(ggml_cuda_dependent_false_v<T>, "Unsupported type for block reduce max");
         }
     }
 
     static __device__ T sentinel() {
-        if constexpr (std::is_same<T, float>::value) {
+        if constexpr (std::is_same_v<T, float>) {
             return -INFINITY;
-        } else if constexpr (std::is_same<T, half2>::value) {
+        } else if constexpr (std::is_same_v<T, half2>) {
             return make_half2(-INFINITY, -INFINITY);
         } else {
-            static_assert(ggml_cuda_dependent_false<T>::value, "Unsupported type for block reduce max");
+            static_assert(ggml_cuda_dependent_false_v<T>, "Unsupported type for block reduce max");
         }
     }
 };
