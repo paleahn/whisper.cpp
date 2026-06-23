@@ -515,6 +515,9 @@ static __device__ __forceinline__ float warp_reduce_max(float x) {
     return x;
 }
 
+template<int width = WARP_SIZE>
+static __device__ __forceinline__ half2 warp_reduce_max(half2 x);
+
 template<typename T, int width = WARP_SIZE>
 static __device__ __forceinline__ T warp_prefix_inclusive_sum(T x) {
     const int lane_id = threadIdx.x % width;
@@ -714,7 +717,7 @@ static __device__ __forceinline__ half2 ggml_cuda_hmax2(const half2 a, const hal
 #endif
 }
 
-template<int width = WARP_SIZE>
+template<int width>
 static __device__ __forceinline__ half2 warp_reduce_max(half2 x) {
 #if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL || defined(GGML_USE_HIP)
 #pragma unroll
